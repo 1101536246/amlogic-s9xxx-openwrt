@@ -10,15 +10,6 @@ on:
   repository_dispatch:
   workflow_dispatch:
     inputs:
-      source_branch:
-        description: "Select the source branch"
-        required: false
-        default: "lede"
-        type: choice
-        options:
-          - lede
-          - official
-          - immortalwrt
       openwrt_soc:
         description: "Select device board"
         required: false
@@ -28,16 +19,18 @@ on:
           - all
           - s922x_s905x3_s905x2_s912_s905d_s905
           - rock5b_h88k
-          - h66k_h68k_r66s_r68s_e25_photonicat
+          - h66k_h68k_h69k_r66s_r68s_e25
           - beikeyun_l1pro
           - rock5b
           - h88k
           - h66k
           - h68k
+          - h69k
           - r66s
           - r68s
           - e25
           - photonicat
+          - cm3
           - beikeyun
           - l1pro
           - vplus
@@ -76,13 +69,13 @@ on:
         default: true
         type: boolean
       openwrt_storage:
-        description: "Select OpenWrt image storage time."
+        description: "Select image storage type."
         required: false
-        default: "lts"
+        default: "save"
         type: choice
         options:
-          - lts
-          - tmp
+          - save
+          - temp
 
 env:
   TZ: America/New_York
@@ -118,15 +111,18 @@ jobs:
         id: down
         if: ${{ steps.init.outputs.status }} == 'success' && !cancelled()
         run: |
+          armvirt_tarfile_repo="ophub/amlogic-s9xxx-openwrt"
+          releases_tag_keywords="OpenWrt_lede_"
+
           armvirt_tarfile_path="openwrt/bin/targets/armvirt/64"
           [[ -d "${armvirt_tarfile_path}" ]] || mkdir -p ${armvirt_tarfile_path}
 
           latest_version="$(curl -s \
                               -H "Accept: application/vnd.github+json" \
                               -H "Authorization: Bearer ${{ secrets.GH_TOKEN }}" \
-                              https://api.github.com/repos/${GITHUB_REPOSITORY}/releases |
+                              https://api.github.com/repos/${armvirt_tarfile_repo}/releases |
                               jq '.[]' |
-                              jq -s --arg RTK "OpenWrt_${{ inputs.source_branch }}_" '.[] | select(.tag_name | contains($RTK))' |
+                              jq -s --arg RTK "${releases_tag_keywords}" '.[] | select(.tag_name | contains($RTK))' |
                               jq -s '.[].assets[] | {data:.updated_at, url:.browser_download_url}' |
                               jq -s --arg BOARD "-rootfs.tar.gz" '.[] | select(.url | endswith($BOARD))' |
                               jq -s 'sort_by(.data)|reverse[]' |
@@ -143,7 +139,7 @@ jobs:
           echo "build_tag=OpenWrt_aarch64_${{ inputs.openwrt_storage }}_$(date +"%Y.%m")" >> ${GITHUB_OUTPUT}
           echo "status=success" >> ${GITHUB_OUTPUT}
 
-      - name: Packaging OpenWrt [ ${{ inputs.source_branch }} ]
+      - name: Packaging OpenWrt
         uses: ophub/flippy-openwrt-actions@main
         if: ${{ steps.down.outputs.status }} == 'success' && !cancelled()
         env:
@@ -161,10 +157,17 @@ jobs:
           tag: ${{ steps.down.outputs.build_tag }}
           artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
           allowUpdates: true
+          removeArtifacts: false
+          replacesArtifacts: true
           token: ${{ secrets.GH_TOKEN }}
           body: |
-            This is OpenWrt firmware for Amlogic and Rockchip
-            * Firmware information
-            Default IP: 192.168.1.1
-            Default username: root
-            Default password: password
+            ### OpenWrt Image information
+            - Default IP: 192.168.1.1
+            - Default username: root
+            - Default password: password
+            - Default WIFI name: OpenWrt
+            - Default WIFI password: none
+            ### Install to EMMC
+            - Login to OpenWrt → System → Amlogic Service → Install OpenWrt
+            ### OpenWrt Image Verification
+            - sha256sum

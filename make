@@ -79,7 +79,7 @@ firmware_repo="https://github.com/ophub/firmware/tree/main/firmware"
 firmware_repo="${firmware_repo//tree\/main/trunk}"
 
 # Install/Update script files download repository
-script_repo="https://github.com/ophub/luci-app-amlogic/tree/main/luci-app-amlogic/root/usr/sbin"
+script_repo="https://github.com/ophub/luci-app-amlogic/tree/main/luci-app-amlogic"
 # Convert script repository address to svn format
 script_repo="${script_repo//tree\/main/trunk}"
 
@@ -93,6 +93,7 @@ specific_tags="${default_tags}"
 stable_kernel=("6.1.1" "5.15.1")
 flippy_kernel=("6.1.1" "5.15.1")
 dev_kernel=("6.1.1" "5.15.1")
+beta_kernel=("6.1.1" "5.15.1")
 rk3588_kernel=("5.10.1")
 # Set to automatically use the latest kernel
 auto_kernel="true"
@@ -198,12 +199,13 @@ init_var() {
             ;;
         -k | --Kernel)
             if [[ -n "${2}" ]]; then
-                oldIFS=$IFS
-                IFS=_
+                oldIFS="${IFS}"
+                IFS="_"
                 flippy_kernel=(${2})
                 stable_kernel=(${2})
                 dev_kernel=(${2})
-                IFS=$oldIFS
+                beta_kernel=(${2})
+                IFS="${oldIFS}"
                 shift
             else
                 error_msg "Invalid -k parameter [ ${2} ]!"
@@ -261,7 +263,7 @@ check_data() {
             cat ${model_conf} |
                 sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' |
                 grep -E "^[^#].*:yes$" | awk -F':' '{print $13}' |
-                sort | uniq | xargs
+                sort -u | xargs
         ))
     else
         board_list=":($(echo ${make_board} | sed -e 's/_/\|/g')):(yes|no)"
@@ -274,7 +276,7 @@ check_data() {
         cat ${model_conf} |
             sed -e 's/NA//g' -e 's/NULL//g' -e 's/[ ][ ]*//g' -e 's/\.y/\.1/g' |
             grep -E "^[^#].*${board_list}$" | awk -F':' '{print $9}' |
-            sort | uniq | xargs
+            sort -u | xargs
     ))
     [[ "${#kernel_from[*]}" -eq "0" ]] && error_msg "Missing [ KERNEL_TAGS ] settings, stop building."
     # Replace custom kernel tags
@@ -284,10 +286,10 @@ check_data() {
     }
 
     # The [ specific kernel ], Use the [ kernel version number ], such as 5.15.y, 6.1.y, etc. download from [ kernel_stable ].
-    specific_kernel=($(echo ${kernel_from[*]} | sed -e 's/[ ][ ]*/\n/g' | grep -E "^[0-9]+" | sort | uniq | xargs))
+    specific_kernel=($(echo ${kernel_from[*]} | sed -e 's/[ ][ ]*/\n/g' | grep -E "^[0-9]+" | sort -u | xargs))
 
     # The [ suffix ] of KERNEL_TAGS starts with a [ letter ], such as kernel_stable, kernel_rk3588, etc.
-    tags_list=($(echo ${kernel_from[*]} | sed -e 's/[ ][ ]*/\n/g' | grep -E "^[a-z]" | sort | uniq | xargs))
+    tags_list=($(echo ${kernel_from[*]} | sed -e 's/[ ][ ]*/\n/g' | grep -E "^[a-z]" | sort -u | xargs))
     # Add the specific kernel to the list
     [[ "${#specific_kernel[*]}" -ne "0" ]] && tags_list=(${tags_list[*]} "specific")
     # Check the kernel list
@@ -314,7 +316,7 @@ find_openwrt() {
     source_codename=""
     source_release_file="etc/openwrt_release"
     temp_dir="$(mktemp -d)"
-    (cd ${temp_dir} && tar -xzf "${openwrt_path}/${openwrt_default_file}" "./${source_release_file}" 2>/dev/null)
+    (cd ${temp_dir} && tar -mxzf "${openwrt_path}/${openwrt_default_file}" "./${source_release_file}" 2>/dev/null)
     # Find custom DISTRIB_SOURCECODE, such as [ official/lede ]
     [[ -f "${temp_dir}/${source_release_file}" ]] && {
         source_codename="$(cat ${temp_dir}/${source_release_file} 2>/dev/null | grep -oE "^DISTRIB_SOURCECODE=.*" | head -n 1 | cut -d"'" -f2)"
@@ -352,8 +354,10 @@ download_depends() {
     svn export ${depends_repo}/armbian-files/common-files/etc/balance_irq ${common_files}/etc --force
 
     # Download install/update and other related files
-    svn export ${script_repo} ${common_files}/usr/sbin --force
+    svn export ${script_repo}/root/usr/sbin ${common_files}/usr/sbin --force
     chmod +x ${common_files}/usr/sbin/*
+    svn export ${script_repo}/root/usr/share/amlogic ${common_files}/usr/share/amlogic --force
+    chmod +x ${common_files}/usr/share/amlogic/*
 }
 
 query_kernel() {
@@ -374,6 +378,9 @@ query_kernel() {
                 ;;
             dev)
                 down_kernel_list=(${dev_kernel[*]})
+                ;;
+            beta)
+                down_kernel_list=(${beta_kernel[*]})
                 ;;
             rk3588)
                 down_kernel_list=(${rk3588_kernel[*]})
@@ -442,6 +449,10 @@ query_kernel() {
                 unset dev_kernel
                 dev_kernel=(${tmp_arr_kernels[*]})
                 ;;
+            beta)
+                unset beta_kernel
+                beta_kernel=(${tmp_arr_kernels[*]})
+                ;;
             rk3588)
                 unset rk3588_kernel
                 rk3588_kernel=(${tmp_arr_kernels[*]})
@@ -493,6 +504,9 @@ download_kernel() {
             dev)
                 down_kernel_list=(${dev_kernel[*]})
                 ;;
+            beta)
+                down_kernel_list=(${beta_kernel[*]})
+                ;;
             rk3588)
                 down_kernel_list=(${rk3588_kernel[*]})
                 ;;
@@ -514,7 +528,7 @@ download_kernel() {
                     wget "${kernel_down_from}" -q -P "${kernel_path}/${kd}"
                     [[ "${?}" -ne "0" ]] && error_msg "Failed to download the kernel files from the server."
 
-                    tar -xf "${kernel_path}/${kd}/${kernel_var}.tar.gz" -C "${kernel_path}/${kd}"
+                    tar -mxzf "${kernel_path}/${kd}/${kernel_var}.tar.gz" -C "${kernel_path}/${kd}"
                     [[ "${?}" -ne "0" ]] && error_msg "[ ${kernel_var} ] kernel decompression failed."
                 else
                     echo -e "${INFO} (${x}.${i}) [ ${k} - ${kernel_var} ] Kernel is in the local directory."
@@ -704,7 +718,7 @@ extract_openwrt() {
     btrfs subvolume create ${tag_rootfs}/etc >/dev/null 2>&1
 
     # Unzip the OpenWrt rootfs file
-    tar -xzf ${openwrt_path}/${openwrt_default_file} -C ${tag_rootfs}
+    tar -mxzf ${openwrt_path}/${openwrt_default_file} -C ${tag_rootfs}
     rm -rf ${tag_rootfs}/lib/modules/*
     rm -f ${tag_rootfs}/rom/sbin/firstboot
 
@@ -748,7 +762,7 @@ replace_kernel() {
     [[ -s "${kernel_boot}" && -s "${kernel_dtb}" && -s "${kernel_modules}" ]] || error_msg "The 3 kernel missing."
 
     # 01. For /boot five files
-    tar -xzf ${kernel_boot} -C ${tag_bootfs}
+    tar -mxzf ${kernel_boot} -C ${tag_bootfs}
     [[ "${PLATFORM}" == "amlogic" ]] && (cd ${tag_bootfs} && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} zImage)
     [[ "${PLATFORM}" == "rockchip" ]] && (cd ${tag_bootfs} && ln -sf uInitrd-${kernel_name} uInitrd && ln -sf vmlinuz-${kernel_name} Image)
     [[ "${PLATFORM}" == "allwinner" ]] && (cd ${tag_bootfs} && cp -f uInitrd-${kernel_name} uInitrd && cp -f vmlinuz-${kernel_name} Image)
@@ -757,12 +771,12 @@ replace_kernel() {
 
     # 02. For /boot/dtb/${PLATFORM}/*
     [[ -d "${tag_bootfs}/dtb/${PLATFORM}" ]] || mkdir -p ${tag_bootfs}/dtb/${PLATFORM}
-    tar -xzf ${kernel_dtb} -C ${tag_bootfs}/dtb/${PLATFORM}
+    tar -mxzf ${kernel_dtb} -C ${tag_bootfs}/dtb/${PLATFORM}
     [[ "${PLATFORM}" == "rockchip" ]] && ln -sf dtb ${tag_bootfs}/dtb-${kernel_name}
     [[ "$(ls ${tag_bootfs}/dtb/${PLATFORM} -l 2>/dev/null | grep "^-" | wc -l)" -ge "2" ]] || error_msg "/boot/dtb/${PLATFORM} files is missing."
 
     # 03. For /lib/modules/${kernel_name}
-    tar -xzf ${kernel_modules} -C ${tag_rootfs}/lib/modules
+    tar -mxzf ${kernel_modules} -C ${tag_rootfs}/lib/modules
     (cd ${tag_rootfs}/lib/modules/${kernel_name}/ && rm -f build source *.ko 2>/dev/null && find ./ -type f -name '*.ko' -exec ln -s {} ./ \;)
     [[ "$(ls ${tag_rootfs}/lib/modules/${kernel_name} -l 2>/dev/null | grep "^d" | wc -l)" -eq "1" ]] || error_msg "/usr/lib/modules kernel folder is missing."
 }
@@ -888,6 +902,8 @@ refactor_rootfs() {
     echo "mt76x2u" >etc/modules.d/mt76x2u
     echo "mt76x2e" >etc/modules.d/mt76x2e
     echo "mt7921e" >etc/modules.d/mt7921e
+    echo "mt7915e" >etc/modules.d/mt7915e
+
     # GPU Driver
     echo "panfrost" >etc/modules.d/panfrost
     # PWM Driver
@@ -908,6 +924,7 @@ refactor_rootfs() {
     echo "rk_crypto2" >etc/modules.d/rk_crypto
     echo -e "snd_soc_simple_card_utils\nsnd_soc_simple_card\nsnd_soc_rockchip_i2s" >etc/modules.d/snd-rk3568
     echo "pwm_fan" >etc/modules.d/pwm-fan
+    echo "option" >etc/modules.d/usb-serial-option
     # For rk3328
     echo -e "snd_soc_simple_card_utils\nsnd_soc_simple_card\nsnd_soc_rockchip_i2s" >etc/modules.d/snd-rk3328
 
@@ -1028,26 +1045,17 @@ clean_tmp() {
     cd ${current_path}
 
     # Unmount the OpenWrt image file
+    fstrim ${tag_bootfs} 2>/dev/null
+    fstrim ${tag_rootfs} 2>/dev/null
     umount -f ${tag_bootfs} 2>/dev/null
     umount -f ${tag_rootfs} 2>/dev/null
     losetup -d ${loop_new} 2>/dev/null
 
-    # Loop to cancel other mounts
-    for x in $(lsblk | grep $(pwd) | grep -oE 'loop[0-9]+' | sort | uniq); do
-        umount -f /dev/${x}p* 2>/dev/null
-        losetup -d /dev/${x} 2>/dev/null
-    done
-    losetup -D
-
     cd ${out_path}
-
     # Compress the OpenWrt image file
     pigz -qf ${openwrt_filename} || gzip -qf ${openwrt_filename}
-    # Generate independent sha256sum verification file for each Armbian image
-    sha256sum ${openwrt_filename}.gz >${openwrt_filename}.gz.sha && sync
 
     cd ${current_path}
-
     # Clear temporary files directory
     rm -rf ${tmp_path} && sync
 }
@@ -1059,7 +1067,6 @@ loop_make() {
     j="1"
     for b in ${make_openwrt[*]}; do
         {
-
             # Set specific configuration for building OpenWrt system
             board="${b}"
             confirm_version
@@ -1075,6 +1082,9 @@ loop_make() {
                 ;;
             dev)
                 kernel_list=(${dev_kernel[*]})
+                ;;
+            beta)
+                kernel_list=(${beta_kernel[*]})
                 ;;
             rk3588)
                 kernel_list=(${rk3588_kernel[*]})
@@ -1126,14 +1136,6 @@ loop_make() {
             let j++
         }
     done
-
-    cd ${out_path}
-
-    # Backup the OpenWrt file
-    cp -f ${openwrt_path}/${openwrt_default_file} .
-
-    # Generate sha256sum check file
-    sha256sum ${openwrt_default_file} >${openwrt_default_file}.gz.sha && sync
 }
 
 # Show welcome message
